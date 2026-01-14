@@ -3,9 +3,9 @@ add_library(${package_name}::${package_name} ALIAS ${package_name})
 
 target_compile_features(${package_name} PUBLIC cxx_std_23)
 
-if(WIN32 AND NOT MINGW)
-  target_link_libraries(${PROJECT_NAME} PRIVATE ws2_32.lib)
-endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE
+  $<$<BOOL:${WIN32}>:ws2_32.lib>
+)
 
 target_include_directories(${package_name} PRIVATE
   src

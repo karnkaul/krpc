@@ -8,7 +8,7 @@ namespace krpc::protocol {
 struct Header {
 	static constexpr std::uint32_t version_v{1};
 
-	std::uint32_t version{version};
+	std::uint32_t version{version_v};
 	std::uint32_t payload_size{};
 };
 

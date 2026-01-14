@@ -1,12 +1,9 @@
 #include "krpc/build_version.hpp"
 #include "krpc/library.hpp"
 #include "krpc/protocol.hpp"
-#include <array>
 #include <cstdlib>
-#include <cstring>
 #include <exception>
 #include <future>
-#include <optional>
 #include <print>
 
 #include <thread>

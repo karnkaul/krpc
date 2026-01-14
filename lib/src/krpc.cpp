@@ -32,7 +32,7 @@ struct AddrInfoDeleter {
 [[nodiscard]] auto to_address(::sockaddr_in const& addr) -> Address {
 	auto ret = Address{.port = int(::ntohs(addr.sin_port))};
 	ret.host.resize(INET_ADDRSTRLEN);
-	::inet_ntop(AF_INET, &addr.sin_addr, ret.host.data(), ::socklen_t(ret.host.size()));
+	socket::net_to_present(AF_INET, addr.sin_addr, ret.host);
 	return ret;
 }
 
@@ -104,10 +104,10 @@ struct Link {
 auto bind(Type const socket, addrinfo const& addr) -> bool {
 	static auto const yes = char{1};
 	::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-	return ::bind(socket, addr.ai_addr, addr.ai_addrlen) != error_v;
+	return ::bind(socket, addr.ai_addr, socklen_t(addr.ai_addrlen)) != error_v;
 }
 
-auto connect(Type const socket, addrinfo const& addr) -> bool { return ::connect(socket, addr.ai_addr, addr.ai_addrlen) != error_v; }
+auto connect(Type const socket, addrinfo const& addr) -> bool { return ::connect(socket, addr.ai_addr, socklen_t(addr.ai_addrlen)) != error_v; }
 
 auto listen(Type const socket, int const backlog) -> bool { return ::listen(socket, backlog) != error_v; }
 
@@ -160,7 +160,7 @@ class Connection : public IConnection {
 	auto send(std::span<std::byte const> data) noexcept -> bool final {
 		if (!socket::poll_match(m_link.descriptor, POLLOUT, timeout)) { return false; }
 		while (!data.empty()) {
-			auto const byte_count = ::send(m_link.descriptor, data.data(), data.size(), 0);
+			auto const byte_count = socket::send(m_link.descriptor, data);
 			if (byte_count <= 0) { return false; }
 			assert(std::size_t(byte_count) <= data.size());
 			data = data.subspan(std::size_t(byte_count));
@@ -171,7 +171,7 @@ class Connection : public IConnection {
 	auto receive_once(std::span<std::byte> buffer) noexcept -> std::size_t final {
 		if (buffer.empty()) { return 0; }
 		if (!socket::poll_match(m_link.descriptor, POLLIN, timeout)) { return 0; }
-		auto const ret = ::recv(m_link.descriptor, buffer.data(), buffer.size(), 0);
+		auto const ret = socket::receive(m_link.descriptor, buffer);
 		if (ret < 0) { return 0; }
 		return std::size_t(ret);
 	}
@@ -180,7 +180,7 @@ class Connection : public IConnection {
 		if (buffer.empty()) { return false; }
 		if (!socket::poll_match(m_link.descriptor, POLLIN, timeout)) { return false; }
 		while (!buffer.empty()) {
-			auto const byte_count = ::recv(m_link.descriptor, buffer.data(), buffer.size(), 0);
+			auto const byte_count = socket::receive(m_link.descriptor, buffer);
 			if (byte_count <= 0) { return false; }
 			buffer = buffer.subspan(std::size_t(byte_count));
 		}
