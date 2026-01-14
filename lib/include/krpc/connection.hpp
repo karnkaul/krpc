@@ -2,6 +2,7 @@
 #include "krpc/address.hpp"
 #include "krpc/polymorphic.hpp"
 #include <chrono>
+#include <cstddef>
 #include <span>
 
 using namespace std::chrono_literals;
@@ -13,10 +14,10 @@ class IConnection : public Polymorphic {
 
 	[[nodiscard]] virtual auto get_address() const noexcept -> Address const& = 0;
 
-	virtual auto send(std::span<char const> data) noexcept -> bool = 0;
+	virtual auto send(std::span<std::byte const> data) noexcept -> bool = 0;
 
-	virtual auto receive_once(std::span<char> buffer) noexcept -> std::size_t = 0;
-	virtual auto receive_exact(std::span<char> buffer) noexcept -> bool = 0;
+	virtual auto receive_once(std::span<std::byte> buffer) noexcept -> std::size_t = 0;
+	virtual auto receive_exact(std::span<std::byte> buffer) noexcept -> bool = 0;
 
 	std::chrono::milliseconds timeout{timeout_v};
 };

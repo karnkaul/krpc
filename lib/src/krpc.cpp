@@ -155,7 +155,7 @@ class Connection : public IConnection {
   private:
 	[[nodiscard]] auto get_address() const noexcept -> Address const& final { return m_link.address; }
 
-	auto send(std::span<char const> data) noexcept -> bool final {
+	auto send(std::span<std::byte const> data) noexcept -> bool final {
 		if (!socket::poll_match(m_link.descriptor, POLLOUT, timeout)) { return false; }
 		while (!data.empty()) {
 			auto const byte_count = ::send(m_link.descriptor, data.data(), data.size(), 0);
@@ -166,7 +166,7 @@ class Connection : public IConnection {
 		return true;
 	}
 
-	auto receive_once(std::span<char> buffer) noexcept -> std::size_t final {
+	auto receive_once(std::span<std::byte> buffer) noexcept -> std::size_t final {
 		if (buffer.empty()) { return 0; }
 		if (!socket::poll_match(m_link.descriptor, POLLIN, timeout)) { return 0; }
 		auto const ret = ::recv(m_link.descriptor, buffer.data(), buffer.size(), 0);
@@ -174,7 +174,7 @@ class Connection : public IConnection {
 		return std::size_t(ret);
 	}
 
-	auto receive_exact(std::span<char> buffer) noexcept -> bool final {
+	auto receive_exact(std::span<std::byte> buffer) noexcept -> bool final {
 		if (buffer.empty()) { return false; }
 		if (!socket::poll_match(m_link.descriptor, POLLIN, timeout)) { return false; }
 		while (!buffer.empty()) {

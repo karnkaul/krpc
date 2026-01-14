@@ -36,12 +36,12 @@ struct Packet {
 		if (message.empty()) { return false; }
 
 		auto const header = to_str(Header{.payload_size = std::uint32_t(message.size())});
-		if (!connection.send(header)) {
+		if (!connection.send(std::as_bytes(std::span{header}))) {
 			std::println(stderr, "Failed to send header");
 			return false;
 		}
 
-		if (!connection.send(message)) {
+		if (!connection.send(std::as_bytes(std::span{message}))) {
 			std::println(stderr, "Failed to send message");
 			return false;
 		}
@@ -54,7 +54,7 @@ struct Packet {
 
 		auto buffer = std::string{};
 		buffer.resize(sizeof(Header));
-		if (!connection.receive_exact(buffer)) {
+		if (!connection.receive_exact(std::as_writable_bytes(std::span{buffer}))) {
 			std::println(stderr, "Failed to receive header");
 			return false;
 		}
@@ -68,7 +68,7 @@ struct Packet {
 		if (header->payload_size == 0) { return true; }
 
 		buffer.resize(std::size_t(header->payload_size));
-		if (!connection.receive_exact(buffer)) {
+		if (!connection.receive_exact(std::as_writable_bytes(std::span{buffer}))) {
 			std::println(stderr, "Failed to receive message");
 			return false;
 		}
