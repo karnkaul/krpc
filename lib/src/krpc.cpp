@@ -221,7 +221,7 @@ class Library : public ILibrary {
 	}
 
   private:
-	[[nodiscard]] auto connect_to(Address const& address) -> std::unique_ptr<IConnection> final {
+	[[nodiscard]] auto connect_to(Address const& address) const -> std::unique_ptr<IConnection> final {
 		auto const addr_info = krpc::get_addr_info(address);
 		for (auto* ptr = addr_info.get(); ptr; ptr = ptr->ai_next) {
 			auto descriptor = socket::Descriptor{*addr_info};
@@ -233,7 +233,7 @@ class Library : public ILibrary {
 		throw Error{"Failed to connect"};
 	}
 
-	auto listen_on(Address const& address, Listener& listener) -> bool final {
+	auto listen_on(Address const& address, Listener& listener) const -> bool final {
 		auto link = socket::listen(address, listener.get_desired_backlog());
 		if (!link) { return false; }
 
