@@ -3,11 +3,13 @@
 #include "krpc/error.hpp"
 #include "krpc/library.hpp"
 #include "krpc/listener.hpp"
+#include "krpc/protocol.hpp"
 #include "platform.hpp"
 #include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include <memory>
 #include <optional>
@@ -258,4 +260,57 @@ class Library : public ILibrary {
 } // namespace
 
 auto ILibrary::create(Options const& options) -> std::unique_ptr<ILibrary> { return std::make_unique<Library>(options); }
+
+namespace protocol {
+namespace {
+[[nodiscard]] auto to_header(std::span<std::byte const> in) -> std::optional<Header> {
+	if (in.size() != sizeof(Header)) { return {}; }
+	auto ret = Header{};
+	std::memcpy(&ret, in.data(), in.size());
+	return ret;
+}
+
+[[nodiscard]] auto to_bytes(Header const& header) -> std::array<std::byte, sizeof(Header)> {
+	auto ret = std::array<std::byte, sizeof(Header)>{};
+	std::memcpy(ret.data(), &header, sizeof(header));
+	return ret;
+}
+
+template <typename ContainerT>
+auto receive(IConnection& connection, ContainerT& out) -> Result {
+	out.clear();
+	out.resize(sizeof(Header));
+	auto bytes = std::as_writable_bytes(std::span{out});
+	if (!connection.receive_exact(bytes)) { return Result::HeaderFailure; }
+
+	auto const header = to_header(bytes);
+	if (!header || header->payload_size == 0) { return Result::InvalidHeader; }
+	if (header->version != Header::version_v) { return Result::IncompatibleHeader; }
+
+	out.resize(std::size_t(header->payload_size));
+	bytes = std::as_writable_bytes(std::span{out});
+	if (!connection.receive_exact(bytes)) { return Result::PacketFailure; }
+
+	return Result::Success;
+}
+} // namespace
+} // namespace protocol
+
+auto protocol::send_packet(IConnection& connection, std::span<std::byte const> packet) -> Result {
+	if (packet.empty()) { return Result::InvalidArgument; }
+
+	auto const header = Header{.payload_size = std::uint32_t(packet.size())};
+	if (!connection.send(to_bytes(header))) { return Result::HeaderFailure; }
+	if (!connection.send(packet)) { return Result::PacketFailure; }
+
+	return Result::Success;
+}
+
+auto protocol::send_packet(IConnection& connection, std::string_view const packet) -> Result {
+	return send_packet(connection, std::as_bytes(std::span{packet}));
+}
+
+auto protocol::receive_packet(IConnection& connection, std::vector<std::byte>& out) -> Result { return receive(connection, out); }
+
+auto protocol::receive_packet(IConnection& connection, std::string& out) -> Result { return receive(connection, out); }
 } // namespace krpc

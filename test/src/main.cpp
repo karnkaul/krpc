@@ -1,5 +1,6 @@
 #include "krpc/build_version.hpp"
 #include "krpc/library.hpp"
+#include "krpc/protocol.hpp"
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -13,73 +14,6 @@
 namespace {
 using namespace std::chrono_literals;
 
-struct Header {
-	std::uint32_t version{1};
-	std::uint32_t payload_size{};
-};
-
-[[nodiscard]] auto to_header(std::string_view const in) -> std::optional<Header> {
-	if (in.size() != sizeof(Header)) { return {}; }
-	auto ret = Header{};
-	std::memcpy(&ret, in.data(), in.size());
-	return ret;
-}
-
-[[nodiscard]] auto to_str(Header const& header) -> std::array<char, sizeof(Header)> {
-	auto ret = std::array<char, sizeof(Header)>{};
-	std::memcpy(ret.data(), &header, sizeof(header));
-	return ret;
-}
-
-struct Packet {
-	auto send_to(krpc::IConnection& connection) const -> bool {
-		if (message.empty()) { return false; }
-
-		auto const header = to_str(Header{.payload_size = std::uint32_t(message.size())});
-		if (!connection.send(std::as_bytes(std::span{header}))) {
-			std::println(stderr, "Failed to send header");
-			return false;
-		}
-
-		if (!connection.send(std::as_bytes(std::span{message}))) {
-			std::println(stderr, "Failed to send message");
-			return false;
-		}
-
-		return true;
-	}
-
-	auto receive_from(krpc::IConnection& connection) -> bool {
-		message.clear();
-
-		auto buffer = std::string{};
-		buffer.resize(sizeof(Header));
-		if (!connection.receive_exact(std::as_writable_bytes(std::span{buffer}))) {
-			std::println(stderr, "Failed to receive header");
-			return false;
-		}
-
-		auto const header = to_header(buffer);
-		if (!header) {
-			std::println(stderr, "Invalid header");
-			return false;
-		}
-
-		if (header->payload_size == 0) { return true; }
-
-		buffer.resize(std::size_t(header->payload_size));
-		if (!connection.receive_exact(std::as_writable_bytes(std::span{buffer}))) {
-			std::println(stderr, "Failed to receive message");
-			return false;
-		}
-
-		message = std::string{buffer.c_str()};
-		return true;
-	}
-
-	std::string message{};
-};
-
 auto const server_address = krpc::Address{.host = "localhost", .port = 51234};
 
 class Server : public krpc::Listener {
@@ -90,9 +24,9 @@ class Server : public krpc::Listener {
 	void on_accept(std::unique_ptr<krpc::IConnection> connection) final {
 		std::println("Server: connected to peer: {}", connection->get_address());
 
-		auto packet = Packet{};
-		if (!packet.receive_from(*connection)) { return; }
-		std::println("Server: received packet:\n  {}", packet.message);
+		auto packet = std::string{};
+		if (krpc::protocol::receive_packet(*connection, packet) != krpc::protocol::Result::Success) { return; }
+		std::println("Server: received packet:\n  {}", packet);
 
 		m_should_poll = false;
 	}
@@ -109,8 +43,11 @@ class Client {
 	}
 
 	void send_packet() {
-		auto packet = Packet{.message = "hello world!"};
-		packet.send_to(*m_connection);
+		auto packet = std::string_view{"hello world!"};
+		if (krpc::protocol::send_packet(*m_connection, packet) != krpc::protocol::Result::Success) {
+			std::println(stderr, "Client: failed to send packet");
+			return;
+		}
 		std::println("Client: packet sent");
 	}
 
