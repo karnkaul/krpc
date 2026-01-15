@@ -265,6 +265,26 @@ auto ILibrary::create() -> Result<std::unique_ptr<ILibrary>> {
 	} catch (std::exception const& /*e*/) { return std::unexpected{Error::InitializationFailure}; }
 }
 
+auto IConnection::create(Address const& address) -> Result<std::unique_ptr<IConnection>> {
+	auto const addr_info = get_addr_info(address);
+	if (!addr_info) { return std::unexpected{Error::InvalidArgument}; }
+
+	for (auto* ptr = addr_info.get(); ptr; ptr = ptr->ai_next) {
+		auto descriptor = socket::Descriptor{*addr_info};
+		if (descriptor == socket::invalid_v) { continue; }
+		if (!socket::connect(descriptor, *addr_info)) { continue; }
+		return std::make_unique<Connection>(socket::Link{.address = to_address(*ptr->ai_addr).value_or(address), .descriptor = std::move(descriptor)});
+	}
+
+	return std::unexpected{Error::SocketFailure};
+}
+
+auto IListener::create(Address const& address, int const backlog) -> Result<std::unique_ptr<IListener>> {
+	auto const addr_info = get_addr_info(address);
+	if (!addr_info) { return std::unexpected{Error::InvalidArgument}; }
+	return socket::listen(*addr_info, backlog).transform([](socket::Link link) { return std::make_unique<Listener>(std::move(link)); });
+}
+
 namespace protocol {
 namespace {
 [[nodiscard]] auto to_header(std::span<std::byte const> in) -> Result<Header> {
@@ -314,23 +334,3 @@ auto protocol::receive_bytes(IConnection& connection) -> Result<std::vector<std:
 auto protocol::receive_string(IConnection& connection) -> Result<std::string> { return receive<std::string>(connection); }
 
 } // namespace krpc
-
-auto krpc::connect_to(Address const& address) -> Result<std::unique_ptr<IConnection>> {
-	auto const addr_info = get_addr_info(address);
-	if (!addr_info) { return std::unexpected{Error::InvalidArgument}; }
-
-	for (auto* ptr = addr_info.get(); ptr; ptr = ptr->ai_next) {
-		auto descriptor = socket::Descriptor{*addr_info};
-		if (descriptor == socket::invalid_v) { continue; }
-		if (!socket::connect(descriptor, *addr_info)) { continue; }
-		return std::make_unique<Connection>(socket::Link{.address = to_address(*ptr->ai_addr).value_or(address), .descriptor = std::move(descriptor)});
-	}
-
-	return std::unexpected{Error::SocketFailure};
-}
-
-auto krpc::create_listener(Address const& address, int const backlog) -> Result<std::unique_ptr<IListener>> {
-	auto const addr_info = get_addr_info(address);
-	if (!addr_info) { return std::unexpected{Error::InvalidArgument}; }
-	return socket::listen(*addr_info, backlog).transform([](socket::Link link) { return std::make_unique<Listener>(std::move(link)); });
-}

@@ -1,9 +1,9 @@
-project(${package_name}-test)
+project(krpc-example)
 
 add_executable(${PROJECT_NAME})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-  ${package_name}::${package_name}
+  krpc::krpc
   $<$<BOOL:${MINGW}>:stdc++exp>
 )
 

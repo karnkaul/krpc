@@ -14,6 +14,12 @@ class IConnection : public Polymorphic {
 	/// \brief Default polling timeout.
 	static constexpr auto timeout_v = 1s;
 
+	/// \brief Connect to a given Address.
+	/// \param address Destination address.
+	/// \param out Output connection, set to a concrete instance on success.
+	/// \returns Concrete instance on successful connection.
+	[[nodiscard]] static auto create(Address const& address) -> Result<std::unique_ptr<IConnection>>;
+
 	[[nodiscard]] virtual auto get_address() const -> Address const& = 0;
 
 	/// \param data Non-empty array of bytes to send.
@@ -26,10 +32,4 @@ class IConnection : public Polymorphic {
 	/// \brief Polling timeout.
 	std::chrono::milliseconds timeout{timeout_v};
 };
-
-/// \brief Connect to a given Address.
-/// \param address Destination address.
-/// \param out Output connection, set to a concrete instance on success.
-/// \returns Concrete instance on successful connection.
-[[nodiscard]] auto connect_to(Address const& address) -> Result<std::unique_ptr<IConnection>>;
 } // namespace krpc
