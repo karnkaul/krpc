@@ -12,7 +12,6 @@
 #include <cstring>
 #include <format>
 #include <memory>
-#include <optional>
 #include <span>
 
 namespace krpc {
@@ -36,9 +35,9 @@ struct AddrInfoDeleter {
 	return ret;
 }
 
-[[nodiscard]] auto to_address(::sockaddr const& addr) -> Address {
+[[nodiscard]] auto to_address(::sockaddr const& addr) -> Result<Address> {
 	auto const* sockaddr = to_sockaddr_in(addr);
-	if (!sockaddr) { return {}; }
+	if (!sockaddr) { return std::unexpected{Error::InvalidArgument}; }
 	return to_address(*sockaddr);
 }
 
@@ -52,7 +51,7 @@ struct AddrInfoDeleter {
 
 	addrinfo* ptr{};
 	auto const result = ::getaddrinfo(name, service, hints, &ptr);
-	if (result != 0) { throw Error{::gai_strerror(result)}; }
+	if (result != 0) { return {}; }
 	return std::unique_ptr<addrinfo, AddrInfoDeleter>{ptr};
 }
 
@@ -81,7 +80,7 @@ class Descriptor {
 		return *this;
 	}
 
-	~Descriptor() noexcept {
+	~Descriptor() {
 		if (m_value == invalid_v) { return; }
 		socket::close(m_value);
 	}
@@ -101,6 +100,18 @@ struct Link {
 	Descriptor descriptor{};
 };
 
+[[nodiscard]] constexpr auto poll_result(int const value) -> Result<void> {
+	if (value < 0) { return std::unexpected{Error::SocketFailure}; }
+	if (value == 0) { return std::unexpected{Error::TimedOut}; }
+	return {};
+}
+
+[[nodiscard]] constexpr auto io_result(std::int64_t const value) -> Result<void> {
+	if (value == 0) { return std::unexpected{Error::Disconnected}; }
+	if (value < 0) { return std::unexpected{Error::SocketFailure}; }
+	return {};
+}
+
 auto bind(Type const socket, addrinfo const& addr) -> bool {
 	static auto const yes = char{1};
 	::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -111,40 +122,41 @@ auto connect(Type const socket, addrinfo const& addr) -> bool { return ::connect
 
 auto listen(Type const socket, int const backlog) -> bool { return ::listen(socket, backlog) != error_v; }
 
-[[nodiscard]] auto poll(Type const socket, short const events, std::chrono::milliseconds const timeout) -> int {
+[[nodiscard]] auto poll_single(Type const socket, std::chrono::milliseconds const timeout, short const events) -> Result<void> {
 	auto fds = std::array{
 		PollFd{.fd = socket, .events = events, .revents = {}},
 	};
-	auto const result = socket::poll(fds, timeout);
-	if (result <= 0) { return result; }
-	return fds.front().revents;
+	auto const value = socket::poll(fds, timeout);
+	if (auto const result = socket::poll_result(value); !result) { return std::unexpected{result.error()}; }
+
+	auto const revents = fds.front().revents;
+	if ((revents & POLLHUP) != 0) { return std::unexpected{Error::Disconnected}; }
+	if ((revents & events) == 0) { return std::unexpected{Error::SocketFailure}; }
+
+	return {};
 }
 
-[[nodiscard]] auto poll_match(Type const socket, short const events, std::chrono::milliseconds const timeout) -> bool {
-	auto const poll_result = poll(socket, events, timeout);
-	return poll_result > 0 && (poll_result & events) != 0;
-}
-
-[[nodiscard]] auto accept(Type const listener) -> std::optional<Link> {
+[[nodiscard]] auto accept(Type const listener) -> Result<Link> {
 	auto remote_addr = ::sockaddr_storage{};
 	auto remote_addr_size = socklen_t(sizeof(remote_addr));
 	void* erased = &remote_addr;
 	auto* sock_addr = static_cast<::sockaddr*>(erased);
 	auto const descriptor = ::accept(listener, sock_addr, &remote_addr_size);
 	if (descriptor == invalid_v) { return {}; }
-	return Link{.address = to_address(*sock_addr), .descriptor = descriptor};
+	auto address = to_address(*sock_addr);
+	return to_address(*sock_addr).transform([&descriptor](Address address) { return Link{.address = std::move(address), .descriptor = descriptor}; });
 }
 
-[[nodiscard]] auto listen(Address const& address, int const backlog) -> std::optional<Link> {
-	auto const addr_info = get_addr_info(address);
-	for (auto* ptr = addr_info.get(); ptr; ptr = ptr->ai_next) {
-		auto descriptor = socket::Descriptor{*addr_info};
+[[nodiscard]] auto listen(addrinfo const& addr, int const backlog) -> Result<Link> {
+	for (auto const* ptr = &addr; ptr; ptr = ptr->ai_next) {
+		auto descriptor = socket::Descriptor{*ptr};
 		if (descriptor == invalid_v) { continue; }
 		if (!socket::bind(descriptor, *ptr)) { continue; }
 		if (!socket::listen(descriptor, backlog)) { continue; }
-		return Link{.address = to_address(*ptr->ai_addr), .descriptor = std::move(descriptor)};
+		auto address = to_address(*ptr->ai_addr).value_or(Address{});
+		return Link{.address = std::move(address), .descriptor = std::move(descriptor)};
 	}
-	return {};
+	return std::unexpected{Error::SocketFailure};
 }
 } // namespace
 } // namespace socket
@@ -155,36 +167,56 @@ class Connection : public IConnection {
 	explicit Connection(socket::Link link) : m_link(std::move(link)) {}
 
   private:
-	[[nodiscard]] auto get_address() const noexcept -> Address const& final { return m_link.address; }
+	[[nodiscard]] auto get_address() const -> Address const& final { return m_link.address; }
 
-	auto send(std::span<std::byte const> data) noexcept -> bool final {
-		if (!socket::poll_match(m_link.descriptor, POLLOUT, timeout)) { return false; }
+	auto send(std::span<std::byte const> data) -> Result<void> final {
+		if (data.empty()) { return std::unexpected{Error::InvalidArgument}; }
+
+		static constexpr auto events_v = POLLOUT;
+		auto result = socket::poll_single(m_link.descriptor, timeout, events_v);
+		if (!result) { return std::unexpected{result.error()}; }
+
 		while (!data.empty()) {
 			auto const byte_count = socket::send(m_link.descriptor, data);
-			if (byte_count <= 0) { return false; }
+			if (auto result = socket::io_result(byte_count); !result) { return std::unexpected{result.error()}; }
 			assert(std::size_t(byte_count) <= data.size());
 			data = data.subspan(std::size_t(byte_count));
 		}
-		return true;
+
+		return {};
 	}
 
-	auto receive_once(std::span<std::byte> buffer) noexcept -> std::size_t final {
-		if (buffer.empty()) { return 0; }
-		if (!socket::poll_match(m_link.descriptor, POLLIN, timeout)) { return 0; }
-		auto const ret = socket::receive(m_link.descriptor, buffer);
-		if (ret < 0) { return 0; }
-		return std::size_t(ret);
-	}
+	auto receive(std::span<std::byte> buffer) -> Result<void> final {
+		if (buffer.empty()) { return std::unexpected{Error::InvalidArgument}; }
 
-	auto receive_exact(std::span<std::byte> buffer) noexcept -> bool final {
-		if (buffer.empty()) { return false; }
-		if (!socket::poll_match(m_link.descriptor, POLLIN, timeout)) { return false; }
+		static constexpr auto events_v = POLLIN;
+		auto result = socket::poll_single(m_link.descriptor, timeout, events_v);
+		if (!result) { return std::unexpected{result.error()}; }
+
 		while (!buffer.empty()) {
 			auto const byte_count = socket::receive(m_link.descriptor, buffer);
-			if (byte_count <= 0) { return false; }
+			if (auto result = socket::io_result(byte_count); !result) { return std::unexpected{result.error()}; }
 			buffer = buffer.subspan(std::size_t(byte_count));
 		}
-		return true;
+
+		return {};
+	}
+
+	socket::Link m_link{};
+};
+
+class Listener : public IListener {
+  public:
+	explicit Listener(socket::Link link) : m_link(std::move(link)) {}
+
+  private:
+	[[nodiscard]] auto get_address() const -> Address const& final { return m_link.address; }
+
+	[[nodiscard]] auto accept(std::chrono::milliseconds const timeout) const -> Result<std::unique_ptr<IConnection>> final {
+		static constexpr auto events_v = POLLIN;
+		return socket::poll_single(m_link.descriptor, timeout, events_v)
+			.and_then([this] { return socket::accept(m_link.descriptor); })
+			.transform([](socket::Link link) { return std::make_unique<Connection>(std::move(link)); });
 	}
 
 	socket::Link m_link{};
@@ -199,7 +231,7 @@ class WsaLib {
 	WsaLib& operator=(WsaLib&&) = delete;
 
 	explicit WsaLib() {
-		if (WSAStartup(MAKEWORD(2, 2), &m_data) != 0) { throw Error{"WSAStartup failed"}; }
+		if (WSAStartup(MAKEWORD(2, 2), &m_data) != 0) { throw std::runtime_error{"WSAStartup failed"}; }
 	}
 
 	~WsaLib() { WSACleanup(); }
@@ -213,60 +245,35 @@ class WsaLib {
 
 class Library : public ILibrary {
   public:
-	explicit Library([[maybe_unused]] Options const& options) {
 #if defined(_WIN32)
-		if (!options.skipWsaStartup) {
-			m_lib.emplace();
-			if (LOBYTE(m_lib->get_data().wVersion) != 2 || HIBYTE(m_lib->get_data().wVersion) != 2) { throw Error{"Winsock 2.2 not available"}; }
-		}
-#endif
+	explicit Library() {
+		if (LOBYTE(m_lib.get_data().wVersion) != 2 || HIBYTE(m_lib.get_data().wVersion) != 2) { throw std::runtime_error{"Winsock 2.2 not available"}; }
 	}
+#else
+	explicit Library() = default;
+#endif
 
   private:
-	[[nodiscard]] auto connect_to(Address const& address) const -> std::unique_ptr<IConnection> final {
-		auto const addr_info = krpc::get_addr_info(address);
-		for (auto* ptr = addr_info.get(); ptr; ptr = ptr->ai_next) {
-			auto descriptor = socket::Descriptor{*addr_info};
-			if (descriptor == socket::invalid_v) { continue; }
-			if (!socket::connect(descriptor, *addr_info)) { continue; }
-			return std::make_unique<Connection>(socket::Link{.address = to_address(*ptr->ai_addr), .descriptor = std::move(descriptor)});
-		}
-
-		throw Error{"Failed to connect"};
-	}
-
-	auto listen_on(Address const& address, Listener& listener) const -> bool final {
-		auto link = socket::listen(address, listener.get_desired_backlog());
-		if (!link) { return false; }
-
-		listener.initialize(link->address);
-		while (listener.should_poll()) {
-			if (!socket::poll_match(link->descriptor, POLLIN, listener.get_poll_timeout())) { continue; }
-
-			auto peer = socket::accept(link->descriptor);
-			if (!peer) { continue; }
-
-			listener.on_accept(std::make_unique<Connection>(std::move(*peer)));
-		}
-		listener.shutdown();
-
-		return true;
-	}
-
 #if defined(_WIN32)
-	std::optional<WsaLib> m_lib{};
+	WsaLib m_lib{};
 #endif
 };
 } // namespace
 
-auto ILibrary::create(Options const& options) -> std::unique_ptr<ILibrary> { return std::make_unique<Library>(options); }
+auto ILibrary::create() -> Result<std::unique_ptr<ILibrary>> {
+	try {
+		return std::make_unique<Library>();
+	} catch (std::exception const& /*e*/) { return std::unexpected{Error::InitializationFailure}; }
+}
 
 namespace protocol {
 namespace {
-[[nodiscard]] auto to_header(std::span<std::byte const> in) -> std::optional<Header> {
-	if (in.size() != sizeof(Header)) { return {}; }
+[[nodiscard]] auto to_header(std::span<std::byte const> in) -> Result<Header> {
+	if (in.size() != sizeof(Header)) { return std::unexpected{Error::InvalidHeader}; }
 	auto ret = Header{};
 	std::memcpy(&ret, in.data(), in.size());
+	if (ret.payload_size == 0) { return std::unexpected{Error::InvalidHeader}; }
+	if (ret.version != Header::version_v) { return std::unexpected{Error::IncompatibleHeader}; }
 	return ret;
 }
 
@@ -277,40 +284,52 @@ namespace {
 }
 
 template <typename ContainerT>
-auto receive(IConnection& connection, ContainerT& out) -> Result {
-	out.clear();
-	out.resize(sizeof(Header));
-	auto bytes = std::as_writable_bytes(std::span{out});
-	if (!connection.receive_exact(bytes)) { return Result::HeaderFailure; }
-
-	auto const header = to_header(bytes);
-	if (!header || header->payload_size == 0) { return Result::InvalidHeader; }
-	if (header->version != Header::version_v) { return Result::IncompatibleHeader; }
-
-	out.resize(std::size_t(header->payload_size));
-	bytes = std::as_writable_bytes(std::span{out});
-	if (!connection.receive_exact(bytes)) { return Result::PacketFailure; }
-
-	return Result::Success;
+auto receive(IConnection& connection) -> Result<ContainerT> {
+	auto ret = ContainerT{};
+	ret.resize(sizeof(Header));
+	auto bytes = std::as_writable_bytes(std::span{ret});
+	return connection.receive(bytes).and_then([bytes] { return to_header(bytes); }).and_then([&](Header const& header) {
+		ret.resize(std::size_t(header.payload_size));
+		bytes = std::as_writable_bytes(std::span{ret});
+		return connection.receive(bytes).transform([&] { return ret; });
+	});
 }
 } // namespace
 } // namespace protocol
 
-auto protocol::send_packet(IConnection& connection, std::span<std::byte const> packet) -> Result {
-	if (packet.empty()) { return Result::InvalidArgument; }
+auto protocol::send_packet(IConnection& connection, std::span<std::byte const> packet) -> Result<void> {
+	if (packet.empty()) { return std::unexpected{Error::InvalidArgument}; }
 
 	auto const header = Header{.payload_size = std::uint32_t(packet.size())};
-	if (!connection.send(to_bytes(header))) { return Result::HeaderFailure; }
-	if (!connection.send(packet)) { return Result::PacketFailure; }
-
-	return Result::Success;
+	return connection.send(to_bytes(header)).and_then([&] { return connection.send(packet); });
 }
 
-auto protocol::send_packet(IConnection& connection, std::string_view const packet) -> Result {
+auto protocol::send_packet(IConnection& connection, std::string_view const packet) -> Result<void> {
 	return send_packet(connection, std::as_bytes(std::span{packet}));
 }
 
-auto protocol::receive_packet(IConnection& connection, std::vector<std::byte>& out) -> Result { return receive(connection, out); }
+auto protocol::receive_bytes(IConnection& connection) -> Result<std::vector<std::byte>> { return receive<std::vector<std::byte>>(connection); }
 
-auto protocol::receive_packet(IConnection& connection, std::string& out) -> Result { return receive(connection, out); }
+auto protocol::receive_string(IConnection& connection) -> Result<std::string> { return receive<std::string>(connection); }
+
 } // namespace krpc
+
+auto krpc::connect_to(Address const& address) -> Result<std::unique_ptr<IConnection>> {
+	auto const addr_info = get_addr_info(address);
+	if (!addr_info) { return std::unexpected{Error::InvalidArgument}; }
+
+	for (auto* ptr = addr_info.get(); ptr; ptr = ptr->ai_next) {
+		auto descriptor = socket::Descriptor{*addr_info};
+		if (descriptor == socket::invalid_v) { continue; }
+		if (!socket::connect(descriptor, *addr_info)) { continue; }
+		return std::make_unique<Connection>(socket::Link{.address = to_address(*ptr->ai_addr).value_or(address), .descriptor = std::move(descriptor)});
+	}
+
+	return std::unexpected{Error::SocketFailure};
+}
+
+auto krpc::create_listener(Address const& address, int const backlog) -> Result<std::unique_ptr<IListener>> {
+	auto const addr_info = get_addr_info(address);
+	if (!addr_info) { return std::unexpected{Error::InvalidArgument}; }
+	return socket::listen(*addr_info, backlog).transform([](socket::Link link) { return std::make_unique<Listener>(std::move(link)); });
+}

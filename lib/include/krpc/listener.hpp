@@ -1,20 +1,19 @@
 #pragma once
 #include "krpc/connection.hpp"
 #include <chrono>
+#include <memory>
 
 using namespace std::chrono_literals;
 
 namespace krpc {
-class Listener : public Polymorphic {
+class IListener : public Polymorphic {
   public:
-	static constexpr auto backlog_v{10};
+	static constexpr auto timeout_v = 1s;
 
-	[[nodiscard]] virtual auto get_desired_backlog() const -> int { return backlog_v; }
-	[[nodiscard]] virtual auto should_poll() const -> bool { return true; }
-	[[nodiscard]] virtual auto get_poll_timeout() const -> std::chrono::milliseconds { return 250ms; }
+	[[nodiscard]] virtual auto get_address() const -> Address const& = 0;
 
-	virtual void initialize(Address const& /*listener_address*/) {}
-	virtual void on_accept(std::unique_ptr<IConnection> connection) = 0;
-	virtual void shutdown() {}
+	[[nodiscard]] virtual auto accept(std::chrono::milliseconds timeout = timeout_v) const -> Result<std::unique_ptr<IConnection>> = 0;
 };
+
+[[nodiscard]] auto create_listener(Address const& address, int backlog) -> Result<std::unique_ptr<IListener>>;
 } // namespace krpc

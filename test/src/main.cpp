@@ -1,5 +1,6 @@
 #include "krpc/build_version.hpp"
 #include "krpc/library.hpp"
+#include "krpc/listener.hpp"
 #include "krpc/protocol.hpp"
 #include <cstdlib>
 #include <exception>
@@ -13,35 +14,61 @@ using namespace std::chrono_literals;
 
 auto const server_address = krpc::Address{.host = "localhost", .port = 51234};
 
-class Server : public krpc::Listener {
-	[[nodiscard]] auto should_poll() const -> bool final { return m_should_poll; }
-
-	void initialize(krpc::Address const& listener_address) final { std::println("Server: listening on {}", listener_address); }
-
-	void on_accept(std::unique_ptr<krpc::IConnection> connection) final {
-		std::println("Server: connected to peer: {}", connection->get_address());
-
-		auto packet = std::string{};
-		if (krpc::protocol::receive_packet(*connection, packet) != krpc::protocol::Result::Success) { return; }
-		std::println("Server: received packet:\n  {}", packet);
-
-		m_should_poll = false;
+class Server {
+  public:
+	explicit Server() {
+		auto result = krpc::create_listener(server_address, 10);
+		if (!result) { throw std::runtime_error{"Failed to create listener"}; }
+		m_listener = std::move(*result);
+		std::println("Server: listening on {}", m_listener->get_address());
 	}
 
-	void shutdown() final { std::println("Server: shutting down"); }
+	void run_for(std::chrono::milliseconds const duration = 10s) {
+		auto const start = std::chrono::steady_clock::now();
+		for (auto now = std::chrono::steady_clock::now(); now - start < duration; now = std::chrono::steady_clock::now()) {
+			auto result = m_listener->accept();
+			if (!result) {
+				if (result.error() == krpc::Error::TimedOut) {
+					std::println("Server: accept() timeout");
+					continue;
+				}
+				std::println(stderr, "Server: failed to accept peer");
+				return;
+			}
 
-	bool m_should_poll{true};
+			auto peer = std::move(*result);
+			std::println("Server: connected to peer: {}", peer->get_address());
+			auto packet = krpc::protocol::receive_string(*peer);
+			if (!packet) {
+				std::println(stderr, "failed to receive packet");
+				return;
+			}
+
+			std::println("Server: received packet:\n  {}", *packet);
+
+			peer.reset();
+			std::println("Server: disconnected peer");
+			return;
+		}
+	}
+
+  private:
+	std::unique_ptr<krpc::IListener> m_listener{};
 };
 
 class Client {
   public:
-	explicit Client(krpc::ILibrary& library) : m_connection(library.connect_to(server_address)) {
+	explicit Client() {
+		std::println("Client: connecting...");
+		auto result = krpc::connect_to(server_address);
+		if (!result) { throw std::runtime_error{"Failed to connect"}; }
+		m_connection = std::move(*result);
 		std::println("Client: connected to {}", m_connection->get_address());
 	}
 
 	void send_packet() {
-		auto packet = std::string_view{"hello world!"};
-		if (krpc::protocol::send_packet(*m_connection, packet) != krpc::protocol::Result::Success) {
+		std::println("Client: sending packet");
+		if (!krpc::protocol::send_packet(*m_connection, "hello world!")) {
 			std::println(stderr, "Client: failed to send packet");
 			return;
 		}
@@ -56,15 +83,17 @@ void run_test() {
 	std::println("krpc v{}", krpc::build_version_v);
 
 	auto library = krpc::ILibrary::create();
+	if (!library) { throw std::runtime_error{"Initialization failure"}; }
 
 	auto server = Server{};
 	auto future = std::async([&] {
-		if (!library->listen_on(server_address, server)) { std::println(stderr, "Server: failed to listen"); }
+		// std::this_thread::sleep_for(5s);
+		server.run_for(3s);
 	});
 
 	{
-		std::this_thread::sleep_for(20ms);
-		auto client = Client{*library};
+		std::this_thread::sleep_for(2s);
+		auto client = Client{};
 		client.send_packet();
 	}
 }
