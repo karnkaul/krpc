@@ -1,0 +1,16 @@
+**/.vs/*
+**/.vscode/*
+build/*
+out/*
+.cache
+.DS_Store
+.clangd
+
+tests/tmp.cpp
+**/test_src
+
+CMakeSettings.json
+compile_commands.json
+/CMakeUserPresets.json
+
+notes.txt
