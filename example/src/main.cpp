@@ -1,20 +1,22 @@
 #include "krpc/library.hpp"
 #include "krpc/listener.hpp"
 #include "krpc/protocol.hpp"
-#include <exception>
 #include <future>
 #include <print>
-
-#include <thread>
+#include <stdexcept>
 
 namespace {
 auto const server_address = krpc::Address{.host = "localhost", .port = 31245};
+
+[[nodiscard]] auto to_error(std::string_view const message, krpc::Error const code) {
+	return std::runtime_error{std::format("{} ({})", message, krpc::to_string_view(code))};
+}
 
 class Sender {
   public:
 	explicit Sender() {
 		auto result = krpc::IConnection::create(server_address);
-		if (!result) { throw std::runtime_error{std::format("Failed to create Sender Connection ({})", krpc::to_string_view(result.error()))}; }
+		if (!result) { throw to_error("Failed to create Sender Connection", result.error()); }
 		m_connection = std::move(*result);
 		std::println("Sender: connected to {}", m_connection->get_address());
 	}
@@ -40,7 +42,7 @@ class Receiver {
   public:
 	explicit Receiver() {
 		auto result = krpc::IListener::create(server_address, 10);
-		if (!result) { throw std::runtime_error{std::format("Failed to create Receiver Listener: {}", krpc::to_string_view(result.error()))}; }
+		if (!result) { throw to_error("Failed to create Receiver Listener", result.error()); }
 		m_listener = std::move(*result);
 		std::println("Receiver: listening on {}", m_listener->get_address());
 	}
@@ -71,7 +73,7 @@ class App {
   public:
 	void run() {
 		auto result = krpc::ILibrary::create();
-		if (!result) { throw std::runtime_error{std::format("Failed to create Library ({})", krpc::to_string_view(result.error()))}; }
+		if (!result) { throw to_error("Failed to create Library", result.error()); }
 		m_library = std::move(*result);
 
 		auto receiver = Receiver{};
