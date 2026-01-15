@@ -13,8 +13,8 @@ struct Header {
 	std::uint32_t payload_size{};
 };
 
-auto send_packet(IConnection& connection, std::span<std::byte const> packet) -> Result<void>;
-auto send_packet(IConnection& connection, std::string_view packet) -> Result<void>;
+auto send_bytes(IConnection& connection, std::span<std::byte const> packet) -> Result<void>;
+auto send_string(IConnection& connection, std::string_view packet) -> Result<void>;
 
 auto receive_bytes(IConnection& connection) -> Result<std::vector<std::byte>>;
 auto receive_string(IConnection& connection) -> Result<std::string>;

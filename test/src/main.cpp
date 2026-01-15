@@ -68,7 +68,7 @@ class Client {
 
 	void send_packet() {
 		std::println("Client: sending packet");
-		if (!krpc::protocol::send_packet(*m_connection, "hello world!")) {
+		if (!krpc::protocol::send_string(*m_connection, "hello world!")) {
 			std::println(stderr, "Client: failed to send packet");
 			return;
 		}

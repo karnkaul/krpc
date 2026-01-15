@@ -143,7 +143,6 @@ auto listen(Type const socket, int const backlog) -> bool { return ::listen(sock
 	auto* sock_addr = static_cast<::sockaddr*>(erased);
 	auto const descriptor = ::accept(listener, sock_addr, &remote_addr_size);
 	if (descriptor == invalid_v) { return {}; }
-	auto address = to_address(*sock_addr);
 	return to_address(*sock_addr).transform([&descriptor](Address address) { return Link{.address = std::move(address), .descriptor = descriptor}; });
 }
 
@@ -288,24 +287,26 @@ auto receive(IConnection& connection) -> Result<ContainerT> {
 	auto ret = ContainerT{};
 	ret.resize(sizeof(Header));
 	auto bytes = std::as_writable_bytes(std::span{ret});
-	return connection.receive(bytes).and_then([bytes] { return to_header(bytes); }).and_then([&](Header const& header) {
-		ret.resize(std::size_t(header.payload_size));
-		bytes = std::as_writable_bytes(std::span{ret});
-		return connection.receive(bytes).transform([&] { return ret; });
-	});
+	return connection.receive(bytes)
+		.and_then([bytes] { return to_header(bytes); })
+		.and_then([&ret, &connection](Header const& header) {
+			ret.resize(std::size_t(header.payload_size));
+			return connection.receive(std::as_writable_bytes(std::span{ret}));
+		})
+		.transform([&ret] { return std::move(ret); });
 }
 } // namespace
 } // namespace protocol
 
-auto protocol::send_packet(IConnection& connection, std::span<std::byte const> packet) -> Result<void> {
+auto protocol::send_bytes(IConnection& connection, std::span<std::byte const> packet) -> Result<void> {
 	if (packet.empty()) { return std::unexpected{Error::InvalidArgument}; }
 
 	auto const header = Header{.payload_size = std::uint32_t(packet.size())};
 	return connection.send(to_bytes(header)).and_then([&] { return connection.send(packet); });
 }
 
-auto protocol::send_packet(IConnection& connection, std::string_view const packet) -> Result<void> {
-	return send_packet(connection, std::as_bytes(std::span{packet}));
+auto protocol::send_string(IConnection& connection, std::string_view const packet) -> Result<void> {
+	return send_bytes(connection, std::as_bytes(std::span{packet}));
 }
 
 auto protocol::receive_bytes(IConnection& connection) -> Result<std::vector<std::byte>> { return receive<std::vector<std::byte>>(connection); }
