@@ -10,10 +10,16 @@ class IListener : public Polymorphic {
   public:
 	static constexpr auto timeout_v = 1s;
 
+	/// \returns Address of this instance.
 	[[nodiscard]] virtual auto get_address() const -> Address const& = 0;
 
+	/// \param timeout Poll timeout.
+	/// \returns Concrete instance on success.
 	[[nodiscard]] virtual auto accept(std::chrono::milliseconds timeout = timeout_v) const -> Result<std::unique_ptr<IConnection>> = 0;
 };
 
+/// \param address Address to listen on.
+/// \param backlog Socket backlog.
+/// \returns Concrete instance on success.
 [[nodiscard]] auto create_listener(Address const& address, int backlog) -> Result<std::unique_ptr<IListener>>;
 } // namespace krpc
