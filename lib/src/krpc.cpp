@@ -113,8 +113,7 @@ struct Link {
 }
 
 auto bind(Type const socket, addrinfo const& addr) -> bool {
-	static auto const yes = char{1};
-	::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+	set_reuse_addr(socket);
 	return ::bind(socket, addr.ai_addr, socklen_t(addr.ai_addrlen)) != error_v;
 }
 

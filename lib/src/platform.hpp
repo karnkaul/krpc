@@ -48,6 +48,10 @@ inline void close(Type const s) { ::close(s); }
 }
 inline auto send(Type const socket, std::span<std::byte const> bytes) -> std::int64_t { return std::int64_t(::send(socket, bytes.data(), bytes.size(), 0)); }
 inline auto receive(Type const socket, std::span<std::byte> buffer) -> std::int64_t { return std::int64_t(::recv(socket, buffer.data(), buffer.size(), 0)); }
+inline void set_reuse_addr(Type const socket) {
+	static constexpr int value_v{1};
+	::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &value_v, sizeof(value_v));
+}
 
 #elif defined(_WIN32)
 
@@ -68,6 +72,11 @@ inline auto send(Type const socket, std::span<std::byte const> bytes) -> std::in
 inline auto receive(Type const socket, std::span<std::byte> buffer) -> std::int64_t {
 	void* erased = buffer.data();
 	return std::int64_t(::recv(socket, static_cast<char*>(erased), int(buffer.size()), 0));
+}
+inline void set_reuse_addr(Type const socket) {
+	static constexpr BOOL value_v{TRUE};
+	void const* erased = &value_v;
+	::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, static_cast<char const*>(erased), int(sizeof(value_v)));
 }
 
 #endif
