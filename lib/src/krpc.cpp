@@ -177,7 +177,7 @@ class Connection : public IConnection {
 		while (!data.empty()) {
 			auto const byte_count = socket::send(m_link.descriptor, data);
 			if (auto result = socket::io_result(byte_count); !result) { return std::unexpected{result.error()}; }
-			assert(std::size_t(byte_count) <= data.size());
+			assert(data.size() >= std::size_t(byte_count)); // NOLINT(misc-static-assert)
 			data = data.subspan(std::size_t(byte_count));
 		}
 
