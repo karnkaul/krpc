@@ -177,27 +177,27 @@ class Connection : public IConnection {
 		while (!data.empty()) {
 			auto const byte_count = socket::send(m_link.descriptor, data);
 			if (auto result = socket::io_result(byte_count); !result) { return std::unexpected{result.error()}; }
-			assert(std::size_t(byte_count) <= data.size());
+			assert(data.size() >= std::size_t(byte_count)); // NOLINT(misc-static-assert)
 			data = data.subspan(std::size_t(byte_count));
 		}
 
 		return {};
 	}
 
-	auto receive(std::span<std::byte> buffer) -> Result<void> final {
-		if (buffer.empty()) { return std::unexpected{Error::InvalidArgument}; }
+	auto receive_to(std::vector<std::byte>& out_buffer) -> Result<Transfer> final {
+		out_buffer.clear();
 
 		static constexpr auto events_v = POLLIN;
 		auto result = socket::poll_single(m_link.descriptor, timeout, events_v);
 		if (!result) { return std::unexpected{result.error()}; }
 
-		while (!buffer.empty()) {
-			auto const byte_count = socket::receive(m_link.descriptor, buffer);
-			if (auto result = socket::io_result(byte_count); !result) { return std::unexpected{result.error()}; }
-			buffer = buffer.subspan(std::size_t(byte_count));
-		}
-
-		return {};
+		static constexpr auto buffer_size_v{60uz * 1024uz};
+		out_buffer.resize(buffer_size_v);
+		auto const byte_count = socket::receive(m_link.descriptor, out_buffer);
+		if (auto result = socket::io_result(byte_count); !result) { return std::unexpected{result.error()}; }
+		out_buffer.resize(std::size_t(byte_count));
+		if (out_buffer.size() == buffer_size_v) { return Transfer::Incomplete; }
+		return Transfer::Complete;
 	}
 
 	socket::Link m_link{};
@@ -301,35 +301,53 @@ namespace {
 	return ret;
 }
 
-template <typename ContainerT>
-auto receive(IConnection& connection) -> Result<ContainerT> {
-	auto ret = ContainerT{};
-	ret.resize(sizeof(Header));
-	auto bytes = std::as_writable_bytes(std::span{ret});
-	return connection.receive(bytes)
-		.and_then([bytes] { return to_header(bytes); })
-		.and_then([&ret, &connection](Header const& header) {
-			ret.resize(std::size_t(header.payload_size));
-			return connection.receive(std::as_writable_bytes(std::span{ret}));
-		})
-		.transform([&ret] { return std::move(ret); });
+[[nodiscard]] constexpr auto as_string_view(std::span<std::byte const> bytes) {
+	void const* data = bytes.data();
+	return std::string_view{static_cast<char const*>(data), bytes.size()};
 }
 } // namespace
 } // namespace protocol
 
-auto protocol::send_bytes(IConnection& connection, std::span<std::byte const> packet) -> Result<void> {
-	if (packet.empty()) { return std::unexpected{Error::InvalidArgument}; }
+auto Protocol::send_bytes(IConnection& connection, std::span<std::byte const> packet) -> Result<void> {
+	auto const header = protocol::Header{.payload_size = std::uint32_t(packet.size())};
+	auto const header_bytes = protocol::to_bytes(header);
 
-	auto const header = Header{.payload_size = std::uint32_t(packet.size())};
-	return connection.send(to_bytes(header)).and_then([&] { return connection.send(packet); });
+	m_buffer.clear();
+	m_buffer.resize(header_bytes.size() + packet.size());
+	auto span = std::span{m_buffer};
+
+	std::memcpy(span.data(), header_bytes.data(), header_bytes.size());
+	span = span.subspan(header_bytes.size());
+
+	if (!packet.empty()) { std::memcpy(span.data(), packet.data(), packet.size()); }
+	return connection.send(m_buffer);
 }
 
-auto protocol::send_string(IConnection& connection, std::string_view const packet) -> Result<void> {
-	return send_bytes(connection, std::as_bytes(std::span{packet}));
+auto Protocol::send_string(IConnection& connection, std::string_view const packet) -> Result<void> {
+	auto const span = std::span{packet};
+	return send_bytes(connection, std::as_bytes(span));
 }
 
-auto protocol::receive_bytes(IConnection& connection) -> Result<std::vector<std::byte>> { return receive<std::vector<std::byte>>(connection); }
+auto Protocol::receive_bytes(IConnection& connection) -> Result<std::span<std::byte const>> {
+	auto result = connection.receive_to(m_buffer);
+	if (!result) { return std::unexpected{result.error()}; }
 
-auto protocol::receive_string(IConnection& connection) -> Result<std::string> { return receive<std::string>(connection); }
+	static auto const header_size = protocol::to_bytes({}).size();
 
+	auto const total_bytes = std::span{m_buffer};
+	if (total_bytes.size() < header_size) { return std::unexpected{Error::InvalidHeader}; }
+
+	auto const header_bytes = total_bytes.subspan(0, header_size);
+	auto const header = protocol::to_header(header_bytes);
+	if (!header) { return std::unexpected{header.error()}; }
+
+	if (header->payload_size + header_size > m_buffer.size()) { return std::unexpected{Error::PacketTooLarge}; }
+
+	auto const packet_bytes = total_bytes.subspan(header_size);
+	return packet_bytes.subspan(0, std::size_t(header->payload_size));
+}
+
+auto Protocol::receive_string(IConnection& connection) -> Result<std::string_view> {
+	return receive_bytes(connection).transform([](std::span<std::byte const> bytes) { return protocol::as_string_view(bytes); });
+}
 } // namespace krpc

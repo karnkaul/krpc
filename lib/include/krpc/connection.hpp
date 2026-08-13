@@ -5,10 +5,13 @@
 #include <chrono>
 #include <cstddef>
 #include <span>
+#include <vector>
 
 using namespace std::chrono_literals;
 
 namespace krpc {
+enum class Transfer : std::int8_t { Complete, Incomplete };
+
 class IConnection : public Polymorphic {
   public:
 	/// \brief Default polling timeout.
@@ -16,7 +19,6 @@ class IConnection : public Polymorphic {
 
 	/// \brief Connect to a given Address.
 	/// \param address Destination address.
-	/// \param out Output connection, set to a concrete instance on success.
 	/// \returns Concrete instance on successful connection.
 	[[nodiscard]] static auto create(Address const& address) -> Result<std::unique_ptr<IConnection>>;
 
@@ -25,9 +27,9 @@ class IConnection : public Polymorphic {
 	/// \param data Non-empty array of bytes to send.
 	/// \returns Success if all data sent.
 	virtual auto send(std::span<std::byte const> data) -> Result<void> = 0;
-	/// \param buffer Non-empty buffer to receive data into until full.
-	/// \returns Success if buffer is full.
-	virtual auto receive(std::span<std::byte> buffer) -> Result<void> = 0;
+	/// \param buffer Buffer to receive data into.
+	/// \returns krpc::Transfer::Complete or krpc::Transfer::Incomplete if successfully received.
+	virtual auto receive_to(std::vector<std::byte>& out_buffer) -> Result<Transfer> = 0;
 
 	/// \brief Polling timeout.
 	std::chrono::milliseconds timeout{timeout_v};
