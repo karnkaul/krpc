@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 set(package_name krpc)
-project(${package_name} VERSION "0.1.1")
+project(${package_name} VERSION "0.1.2")
 
 option(KRPC_BUILD_EXAMPLE "Build krpc example" ${PROJECT_IS_TOP_LEVEL})
 

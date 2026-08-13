@@ -11,6 +11,7 @@ enum class Error : std::int8_t {
 	SocketFailure,
 	InvalidHeader,
 	IncompatibleHeader,
+	PacketTooLarge,
 };
 
 constexpr auto to_string_view(Error const error) -> std::string_view {
@@ -21,6 +22,7 @@ constexpr auto to_string_view(Error const error) -> std::string_view {
 	case Error::TimedOut: return "TimedOut";
 	case Error::SocketFailure: return "SocketFailure";
 	case Error::IncompatibleHeader: return "IncompatibleHeader";
+	case Error::PacketTooLarge: return "PacketTooLarge";
 	default: return "Unknown";
 	}
 }

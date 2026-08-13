@@ -24,7 +24,7 @@ class Sender {
 	auto send() -> bool {
 		static constexpr auto message = std::string_view{"hello world"};
 
-		auto const result = krpc::protocol::send_string(*m_connection, message);
+		auto const result = m_protocol.send_string(*m_connection, message);
 		if (!result) {
 			std::println("Sender: failed to send message ({})", krpc::to_string_view(result.error()));
 			return false;
@@ -36,6 +36,7 @@ class Sender {
 
   private:
 	std::unique_ptr<krpc::IConnection> m_connection{};
+	krpc::Protocol m_protocol{};
 };
 
 class Receiver {
@@ -55,7 +56,7 @@ class Receiver {
 		}
 
 		std::println("Receiver: connected to {}", connection.value()->get_address());
-		auto message = krpc::protocol::receive_string(*connection.value());
+		auto const message = m_protocol.receive_string(*connection.value());
 		if (!message) {
 			std::println("Receiver: failed to receive message ({})", krpc::to_string_view(message.error()));
 			return false;
@@ -67,6 +68,7 @@ class Receiver {
 
   private:
 	std::unique_ptr<krpc::IListener> m_listener{};
+	krpc::Protocol m_protocol{};
 };
 
 class App {
